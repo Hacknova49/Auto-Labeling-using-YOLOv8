@@ -33,14 +33,14 @@ A comprehensive web application for automated object detection and labeling usin
 
 ## Architecture
 
-### Frontend (React + TypeScript + Tailwind CSS)
+### Frontend (`frontend/` - React + TypeScript + Tailwind CSS)
 - Modern, responsive user interface
 - Real-time progress tracking
 - Interactive annotation tools
 - Drag-and-drop file uploads
 - Dark theme optimized for long annotation sessions
 
-### Backend (FastAPI + Python)
+### Backend (`backend/` - FastAPI + Python)
 - RESTful API with OpenAPI documentation
 - Background job processing
 - File upload and management
@@ -77,14 +77,14 @@ docker-compose up --build
 #### Backend Setup
 1. Create a virtual environment:
 ```bash
-cd backend
+cd backend/app
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
 2. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install -r ../requirements/requirements.txt
 ```
 
 3. For actual YOLOv8 integration, uncomment the YOLOv8 dependencies in `requirements.txt` and install:
@@ -94,12 +94,13 @@ pip install ultralytics torch torchvision opencv-python
 
 4. Start the backend server:
 ```bash
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 #### Frontend Setup
 1. Install dependencies:
 ```bash
+cd frontend
 npm install
 ```
 
@@ -114,8 +115,8 @@ npm run dev
 
 The current implementation includes mock YOLOv8 functionality for demonstration. To integrate with actual YOLOv8:
 
-1. Uncomment YOLOv8 dependencies in `backend/requirements.txt`
-2. Replace mock inference in `backend/app.py`:
+1. Uncomment YOLOv8 dependencies in `backend/requirements/requirements.txt`
+2. Replace mock inference in `backend/app/main.py`:
 
 ```python
 from ultralytics import YOLO

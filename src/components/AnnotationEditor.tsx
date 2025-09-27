@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, Save, Trash2, Plus, RotateCcw, ZoomIn, ZoomOut, Square, Move, CreditCard as Edit3, Eye, EyeOff } from 'lucide-react';
-import { useProject, BoundingBox } from '../contexts/ProjectContext';
+import { ArrowLeft, ArrowRight, Save, Trash2, Plus, RotateCcw, ZoomIn, ZoomOut, Square } from 'lucide-react';
+import { useProject } from '../contexts/ProjectContext';
+import { drawBoundingBoxes, getCanvasCoordinates, findBoundingBoxAtPoint, drawTemporaryBox } from '../utils/canvas';
+import { generateId } from '../utils/file';
+import type { BoundingBox } from '../types';
 
 interface AnnotationEditorProps {
   imageId: string;
@@ -25,8 +28,8 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
 
   // Draw canvas whenever image, selection, zoom, or pan changes
   useEffect(() => {
-    if (currentImage && canvasRef.current && imageRef.current) {
-      drawCanvas();
+    if (currentImage && canvasRef.current && imageRef.current && imageRef.current.complete) {
+      drawBoundingBoxes(canvasRef.current, imageRef.current, currentImage, selectedBox, zoom, pan);
     }
   }, [currentImage, selectedBox, zoom, pan]);
 
@@ -36,67 +39,6 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
       processImages([currentImage.id]);
     }
   }, [currentImage]);
-
-  const drawCanvas = () => {
-    const canvas = canvasRef.current;
-    const image = imageRef.current;
-    if (!canvas || !image || !currentImage) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Calculate the scale factor from original image dimensions to the canvas display dimensions (at zoom=1)
-    // This assumes the canvas dimensions are set proportionally in onLoad.
-    const imageToCanvasScale = canvas.width / currentImage.width;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.translate(pan.x, pan.y);
-    ctx.scale(zoom, zoom);
-
-    // Draw the image to fill the canvas at the current zoom level.
-    // The canvas dimensions are already set to fit the image (proportionally scaled down)
-    // when zoom = 1.
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-    currentImage.boundingBoxes.forEach((box) => {
-      const isSelected = selectedBox === box.id;
-      ctx.strokeStyle = isSelected ? '#3B82F6' : '#10B981';
-      ctx.lineWidth = isSelected ? 3 / zoom : 2 / zoom; // Adjust line width for zoom
-      ctx.setLineDash(isSelected ? [5 / zoom, 5 / zoom] : []); // Adjust dash for zoom
-
-      // Scale box coordinates from original image dimensions to the current canvas display dimensions (at zoom=1)
-      const displayX = box.x * imageToCanvasScale;
-      const displayY = box.y * imageToCanvasScale;
-      const displayWidth = box.width * imageToCanvasScale;
-      const displayHeight = box.height * imageToCanvasScale;
-
-      ctx.strokeRect(displayX, displayY, displayWidth, displayHeight);
-
-      const text = `${box.className} (${(box.confidence * 100).toFixed(0)}%)`;
-      ctx.fillStyle = isSelected ? '#3B82F6' : '#10B981';
-      ctx.font = `${12 / zoom}px Arial`; // Adjust font size for zoom
-      const textMetrics = ctx.measureText(text);
-      const textWidth = textMetrics.width + (8 / zoom); // Adjust padding for zoom
-      const textHeight = 20 / zoom; // Approximate height for the text background
-
-      ctx.fillRect(
-        displayX,
-        displayY - textHeight,
-        textWidth,
-        textHeight
-      );
-
-      ctx.fillStyle = 'white';
-      ctx.fillText(
-        text,
-        displayX + (4 / zoom),
-        displayY - (6 / zoom)
-      );
-    });
-
-    ctx.restore();
-  };
 
   const handleZoomIn = () => {
     setZoom(prevZoom => Math.min(prevZoom + 0.1, 5)); // Max zoom 5x
@@ -114,22 +56,13 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !currentImage) return;
 
-    const rect = canvasRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    // Convert mouse coordinates on canvas to coordinates on the original image
-    const xOnImage = ((mouseX - pan.x) / zoom) * (currentImage.width / canvasRef.current.width);
-    const yOnImage = ((mouseY - pan.y) / zoom) * (currentImage.height / canvasRef.current.height);
+    const coords = getCanvasCoordinates(e, canvasRef.current, currentImage, zoom, pan);
 
     if (isDrawing) {
-      setDrawStart({ x: xOnImage, y: yOnImage });
+      setDrawStart(coords);
       setSelectedBox(null); // Deselect any box when starting to draw
     } else {
-      const clickedBox = currentImage.boundingBoxes.find(box =>
-        xOnImage >= box.x && xOnImage <= box.x + box.width &&
-        yOnImage >= box.y && yOnImage <= box.y + box.height
-      );
+      const clickedBox = findBoundingBoxAtPoint(coords, currentImage.boundingBoxes);
 
       if (clickedBox) {
         setSelectedBox(clickedBox.id);
@@ -151,56 +84,32 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
       setPan(prevPan => ({ x: prevPan.x + dx, y: prevPan.y + dy }));
       setLastPanPos({ x: e.clientX, y: e.clientY });
     } else if (isDrawing && drawStart) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      drawCanvas(); // Redraw existing annotations first
-
-      ctx.save();
-      ctx.translate(pan.x, pan.y);
-      ctx.scale(zoom, zoom);
-
-      const rect = canvas.getBoundingClientRect();
-      const currentXOnCanvas = (e.clientX - rect.left - pan.x) / zoom;
-      const currentYOnCanvas = (e.clientY - rect.top - pan.y) / zoom;
-
-      // Convert drawStart (image coords) to canvas coords
-      const imageToCanvasScale = canvas.width / currentImage.width;
-      const startXOnCanvas = drawStart.x * imageToCanvasScale;
-      const startYOnCanvas = drawStart.y * imageToCanvasScale;
-
-      const tempBoxX = Math.min(startXOnCanvas, currentXOnCanvas);
-      const tempBoxY = Math.min(startYOnCanvas, currentYOnCanvas);
-      const tempBoxWidth = Math.abs(startXOnCanvas - currentXOnCanvas);
-      const tempBoxHeight = Math.abs(startYOnCanvas - currentYOnCanvas);
-
-      ctx.strokeStyle = '#3B82F6';
-      ctx.lineWidth = 2 / zoom;
-      ctx.setLineDash([5 / zoom, 5 / zoom]);
-      ctx.strokeRect(tempBoxX, tempBoxY, tempBoxWidth, tempBoxHeight);
-      ctx.restore();
+      if (canvasRef.current && imageRef.current) {
+        // Redraw existing annotations first
+        drawBoundingBoxes(canvasRef.current, imageRef.current, currentImage, selectedBox, zoom, pan);
+        
+        // Draw temporary box
+        const currentCoords = getCanvasCoordinates(e, canvasRef.current, currentImage, zoom, pan);
+        drawTemporaryBox(canvasRef.current, drawStart, currentCoords, currentImage, zoom, pan);
+      }
     }
   };
 
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsPanning(false);
     if (isDrawing && drawStart && currentImage) {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+      if (!canvasRef.current) return;
+      
+      const endCoords = getCanvasCoordinates(e, canvasRef.current, currentImage, zoom, pan);
 
-      const rect = canvas.getBoundingClientRect();
-      const endXOnImage = ((e.clientX - rect.left - pan.x) / zoom) * (currentImage.width / canvas.width);
-      const endYOnImage = ((e.clientY - rect.top - pan.y) / zoom) * (currentImage.height / canvas.height);
-
-      const newBoxX = Math.min(drawStart.x, endXOnImage);
-      const newBoxY = Math.min(drawStart.y, endYOnImage);
-      const newBoxWidth = Math.abs(drawStart.x - endXOnImage);
-      const newBoxHeight = Math.abs(drawStart.y - endYOnImage);
+      const newBoxX = Math.min(drawStart.x, endCoords.x);
+      const newBoxY = Math.min(drawStart.y, endCoords.y);
+      const newBoxWidth = Math.abs(drawStart.x - endCoords.x);
+      const newBoxHeight = Math.abs(drawStart.y - endCoords.y);
 
       if (newBoxWidth > 5 && newBoxHeight > 5) { // Minimum size for a valid box
         const newBox: BoundingBox = {
-          id: Math.random().toString(36).substring(7),
+          id: generateId(),
           x: newBoxX,
           y: newBoxY,
           width: newBoxWidth,
@@ -225,7 +134,7 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
     if (!currentImage) return;
 
     const newBox: BoundingBox = {
-      id: Math.random().toString(36).substring(7),
+      id: generateId(),
       x: currentImage.width * 0.25,
       y: currentImage.height * 0.25,
       width: currentImage.width * 0.3,
@@ -405,7 +314,7 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
 
                 canvas.width = newWidth;
                 canvas.height = newHeight;
-                drawCanvas();
+                drawBoundingBoxes(canvas, image, currentImage, selectedBox, zoom, pan);
               }
             }}
           />

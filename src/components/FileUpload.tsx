@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Upload, X, Image, Folder, AlertCircle, Loader2 } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
+import { formatFileSize } from '../utils/file';
 
 interface FileUploadProps {
   onClose: () => void;
@@ -53,7 +54,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
     setUploadedFiles(files);
   };
 
-  // Update the handleFileSelect function:
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     setError(null);
     const files = Array.from(e.target.files || []);
@@ -130,14 +130,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
 
   const removeFile = (index: number) => {
     setUploadedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   return (

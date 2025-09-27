@@ -1,18 +1,11 @@
 import React, { useState } from 'react';
 import { X, Plus, Minus, Settings, Save } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
+import { COMMON_CLASSES } from '../constants';
+import type { PrioritizationPrompt } from '../types';
 
 interface PrioritizationPanelProps {
   onClose: () => void;
-}
-
-interface PrioritizationPrompt {
-  confidenceThreshold?: number;
-  classPriorities?: string[];
-  classWeights?: { [key: string]: number };
-  minObjectSize?: number;
-  maxObjectSize?: number;
-  customPrompt?: string;
 }
 
 export const PrioritizationPanel: React.FC<PrioritizationPanelProps> = ({ onClose }) => {
@@ -20,13 +13,6 @@ export const PrioritizationPanel: React.FC<PrioritizationPanelProps> = ({ onClos
   const [localPrompt, setLocalPrompt] = useState<PrioritizationPrompt>(prioritizationPrompt || {});
   const [mode, setMode] = useState<'simple' | 'advanced' | 'json'>('simple');
   const [jsonInput, setJsonInput] = useState<string>(JSON.stringify(prioritizationPrompt || {}, null, 2));
-
-  const commonClasses = [
-    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck',
-    'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
-    'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra',
-    'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee'
-  ];
 
   const handleSave = () => {
     if (mode === 'json') {
@@ -147,7 +133,7 @@ export const PrioritizationPanel: React.FC<PrioritizationPanelProps> = ({ onClos
               ))}
             </div>
             <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto">
-              {commonClasses
+              {COMMON_CLASSES
                 .filter(c => !localPrompt.classPriorities?.includes(c))
                 .map((className) => (
                   <button

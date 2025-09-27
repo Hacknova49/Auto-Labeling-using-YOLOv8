@@ -13,12 +13,12 @@ from pathlib import Path
 from PIL import Image
 import logging
 
-# Real YOLO import
+
 from ultralytics import YOLO
 
 app = FastAPI(title="YOLOv8 Auto-Labeling API", version="1.0.0")
 
-# CORS configuration (change origins for production)
+# CORS configuration 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

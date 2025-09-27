@@ -78,6 +78,13 @@ export const ImageGrid: React.FC<ImageGridProps> = ({ onImageSelect }) => {
                 </span>
               </div>
             )}
+            
+            {/* Processing indicator */}
+            {image.status === 'processing' && (
+              <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                <div className="text-white text-sm">Processing...</div>
+              </div>
+            )}
           </div>
 
           <div className="p-3">

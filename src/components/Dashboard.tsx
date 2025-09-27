@@ -96,17 +96,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ onViewChange, onImageSelec
               <Upload className="h-4 w-4 mr-2" />
               Upload Images
             </button>
-            <button className="inline-flex items-center px-4 py-2 border border-gray-600 text-sm font-medium rounded-md text-gray-300 hover:text-white hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+            <button 
+              disabled
+              className="inline-flex items-center px-4 py-2 border border-gray-600 text-sm font-medium rounded-md text-gray-500 cursor-not-allowed opacity-50"
+            >
               <Folder className="h-4 w-4 mr-2" />
-              Upload Folder
+              Upload Folder (Coming Soon)
             </button>
-            <button className="inline-flex items-center px-4 py-2 border border-gray-600 text-sm font-medium rounded-md text-gray-300 hover:text-white hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+            <button 
+              disabled
+              className="inline-flex items-center px-4 py-2 border border-gray-600 text-sm font-medium rounded-md text-gray-500 cursor-not-allowed opacity-50"
+            >
               <Camera className="h-4 w-4 mr-2" />
-              Webcam
+              Webcam (Coming Soon)
             </button>
-            <button className="inline-flex items-center px-4 py-2 border border-gray-600 text-sm font-medium rounded-md text-gray-300 hover:text-white hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+            <button 
+              disabled
+              className="inline-flex items-center px-4 py-2 border border-gray-600 text-sm font-medium rounded-md text-gray-500 cursor-not-allowed opacity-50"
+            >
               <Video className="h-4 w-4 mr-2" />
-              Upload Video
+              Upload Video (Coming Soon)
             </button>
           </div>
           

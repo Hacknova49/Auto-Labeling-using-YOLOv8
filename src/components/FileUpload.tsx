@@ -85,10 +85,43 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
     if (uploadedFiles.length > 0) {
       try {
         setIsUploading(true);
-        await addImages(uploadedFiles);
+        setError(null);
+        
+        // Create FormData for backend upload
+        const formData = new FormData();
+        uploadedFiles.forEach(file => {
+          formData.append('files', file);
+        });
+        
+        // Upload to backend first
+        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/upload`, {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (!response.ok) {
+          throw new Error('Upload failed');
+        }
+        
+        const data = await response.json();
+        
+        // Add images to local state with backend data
+        const imageDataList = data.uploaded_files.map((file: any) => ({
+          id: file.id,
+          filename: file.filename,
+          url: URL.createObjectURL(uploadedFiles.find(f => f.name === file.filename)!),
+          width: file.width,
+          height: file.height,
+          status: 'pending' as const,
+          boundingBoxes: [],
+        }));
+        
+        // Add to context
+        addImages(uploadedFiles);
         onClose();
       } catch (error) {
-        setError('Failed to upload images');
+        console.error('Upload error:', error);
+        setError('Failed to upload images. Please try again.');
       } finally {
         setIsUploading(false);
       }

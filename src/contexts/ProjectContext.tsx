@@ -77,19 +77,28 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [isProcessing, setIsProcessing] = useState(false);
 
   const addImages = (files: File[]) => {
-    const newImages: ImageData[] = files
-      .filter(file => file.type.startsWith('image/'))
-      .map(file => ({
-        id: Math.random().toString(36).substring(7),
-        filename: file.name,
-        url: URL.createObjectURL(file),
-        width: 800,
-        height: 600,
-        status: 'pending' as const,
-        boundingBoxes: [],
-      }));
-
-    setImages(prev => [...prev, ...newImages]);
+    const newImages: ImageData[] = [];
+    
+    files.filter(file => file.type.startsWith('image/')).forEach(file => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      
+      img.onload = () => {
+        const imageData: ImageData = {
+          id: Math.random().toString(36).substring(7),
+          filename: file.name,
+          url: url,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+          status: 'pending' as const,
+          boundingBoxes: [],
+        };
+        
+        setImages(prev => [...prev, imageData]);
+      };
+      
+      img.src = url;
+    });
   };
 
   const updateImage = (imageId: string, updates: Partial<ImageData>) => {
@@ -113,87 +122,88 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
       updateImage(imageId, { status: "processing" });
 
       try {
-        // Convert blob from object URL
-        const fileResponse = await fetch(img.url);
-        const blob = await fileResponse.blob();
+        // Create FormData with the file
         const formData = new FormData();
-        formData.append("file", blob, img.filename);
+        
+        // Convert blob URL back to file
+        const response = await fetch(img.url);
+        const blob = await response.blob();
+        const file = new File([blob], img.filename, { type: blob.type });
+        formData.append("files", file);
 
-        // Send to YOLOv8 backend
-        const res = await fetch(import.meta.env.VITE_API_URL + "/api/upload", {
+        // Upload file first
+        const uploadRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/upload`, {
           method: "POST",
           body: formData,
         });
 
-        if (!res.ok) throw new Error("Detection API error");
-
-        const data = await res.json();
-
-        // Define the type for backend bounding box response
-        type BackendBoundingBox = {
-          x: number;
-          y: number;
-          width: number;
-          height: number;
-          class_name: string;
-          confidence: number;
-        };
-
-        // Apply prioritization filters
-        const detections: BoundingBox[] = (data.boundingBoxes as BackendBoundingBox[])
-          .filter((box: BackendBoundingBox) => {
-            // Confidence filter
-            if (
-              prioritizationPrompt.confidenceThreshold &&
-              box.confidence < prioritizationPrompt.confidenceThreshold
-            ) return false;
-
-            // Ignore classes
-            if (
-              prioritizationPrompt.ignoreClasses &&
-              prioritizationPrompt.ignoreClasses.includes(box.class_name)
-            ) return false;
-
-            // Object size constraints
-            const area = box.width * box.height;
-            if (
-              prioritizationPrompt.minObjectSize &&
-              area < prioritizationPrompt.minObjectSize
-            ) return false;
-
-            if (
-              prioritizationPrompt.maxObjectSize &&
-              area > prioritizationPrompt.maxObjectSize
-            ) return false;
-
-            return true;
-          })
-          .map((box: BackendBoundingBox) => ({
-            id: Math.random().toString(36).substring(7),
-            x: box.x,
-            y: box.y,
-            width: box.width,
-            height: box.height,
-            className: box.class_name,
-            confidence: box.confidence,
-          }));
-
-        // Optional: reorder based on class priorities
-        if (prioritizationPrompt.classPriorities?.length) {
-          detections.sort((a, b) => {
-            const priA =
-              prioritizationPrompt.classPriorities?.indexOf(a.className) ?? 999;
-            const priB =
-              prioritizationPrompt.classPriorities?.indexOf(b.className) ?? 999;
-            return priA - priB;
-          });
-        }
-
-        updateImage(imageId, {
-          status: "completed",
-          boundingBoxes: detections,
-          processingTime: 1.0,
+        if (!uploadRes.ok) throw new Error("Upload failed");
+        
+        const uploadData = await uploadRes.json();
+        const uploadedFile = uploadData.uploaded_files[0];
+        
+        // Process the uploaded image
+        const processRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/process`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            image_ids: [uploadedFile.id],
+            prioritization: prioritizationPrompt,
+          }),
         });
+
+        if (!processRes.ok) throw new Error("Processing failed");
+        
+        const processData = await processRes.json();
+        const jobId = processData.job_id;
+        
+        // Poll for results
+        let completed = false;
+        let attempts = 0;
+        const maxAttempts = 30;
+        
+        while (!completed && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          const statusRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/jobs/${jobId}`);
+          if (!statusRes.ok) throw new Error("Status check failed");
+          
+          const statusData = await statusRes.json();
+          
+          if (statusData.status === 'completed') {
+            completed = true;
+            const result = statusData.results[0];
+            
+            if (result && result.detections) {
+              const detections: BoundingBox[] = result.detections.map((detection: any) => ({
+                id: detection.id || Math.random().toString(36).substring(7),
+                x: detection.x,
+                y: detection.y,
+                width: detection.width,
+                height: detection.height,
+                className: detection.class_name,
+                confidence: detection.confidence,
+              }));
+
+              updateImage(imageId, {
+                status: "completed",
+                boundingBoxes: detections,
+                processingTime: result.processing_time || 1.0,
+              });
+            } else {
+              throw new Error("No detection results");
+            }
+          }
+          
+          attempts++;
+        }
+        
+        if (!completed) {
+          throw new Error("Processing timeout");
+        }
+        
       } catch (err) {
         console.error("Detection failed:", err);
         updateImage(imageId, { status: "pending" });

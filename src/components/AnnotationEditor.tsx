@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, Save, Trash2, Plus, RotateCcw, ZoomIn, ZoomOut, Square } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Save, Trash2, Plus, RotateCcw, ZoomIn, ZoomOut, Square, Move, Edit3, Eye, EyeOff } from 'lucide-react';
 import { useProject, BoundingBox } from '../contexts/ProjectContext';
 
 interface AnnotationEditorProps {
@@ -12,13 +12,21 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
   const { images, updateBoundingBoxes, updateImage, processImages, isProcessing } = useProject();
   const [selectedBox, setSelectedBox] = useState<string | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [isMoving, setIsMoving] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeHandle, setResizeHandle] = useState<string | null>(null);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
+  const [moveStart, setMoveStart] = useState<{ x: number; y: number } | null>(null);
+  const [editingClass, setEditingClass] = useState<string | null>(null);
+  const [newClassName, setNewClassName] = useState('');
+  const [showAllBoxes, setShowAllBoxes] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false); // New state for panning
   const [lastPanPos, setLastPanPos] = useState({ x: 0, y: 0 }); // New state for panning
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const classInputRef = useRef<HTMLInputElement>(null);
 
   const currentImage = images.find(img => img.id === imageId);
   const currentIndex = images.findIndex(img => img.id === imageId);
@@ -28,7 +36,15 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
     if (currentImage && canvasRef.current && imageRef.current) {
       drawCanvas();
     }
-  }, [currentImage, selectedBox, zoom, pan]);
+  }, [currentImage, selectedBox, zoom, pan, showAllBoxes]);
+
+  // Focus input when editing class
+  useEffect(() => {
+    if (editingClass && classInputRef.current) {
+      classInputRef.current.focus();
+      classInputRef.current.select();
+    }
+  }, [editingClass]);
 
   // Automatically run YOLO detection if no boxes exist
   useEffect(() => {
@@ -60,6 +76,9 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
 
     currentImage.boundingBoxes.forEach((box) => {
+      // Skip drawing if showAllBoxes is false and this box is not selected
+      if (!showAllBoxes && selectedBox !== box.id) return;
+      
       const isSelected = selectedBox === box.id;
       ctx.strokeStyle = isSelected ? '#3B82F6' : '#10B981';
       ctx.lineWidth = isSelected ? 3 / zoom : 2 / zoom; // Adjust line width for zoom
@@ -72,6 +91,34 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
       const displayHeight = box.height * imageToCanvasScale;
 
       ctx.strokeRect(displayX, displayY, displayWidth, displayHeight);
+
+      // Draw resize handles for selected box
+      if (isSelected) {
+        const handleSize = 8 / zoom;
+        ctx.fillStyle = '#3B82F6';
+        
+        // Corner handles
+        const handles = [
+          { x: displayX, y: displayY, cursor: 'nw-resize' },
+          { x: displayX + displayWidth, y: displayY, cursor: 'ne-resize' },
+          { x: displayX, y: displayY + displayHeight, cursor: 'sw-resize' },
+          { x: displayX + displayWidth, y: displayY + displayHeight, cursor: 'se-resize' },
+          // Edge handles
+          { x: displayX + displayWidth / 2, y: displayY, cursor: 'n-resize' },
+          { x: displayX + displayWidth / 2, y: displayY + displayHeight, cursor: 's-resize' },
+          { x: displayX, y: displayY + displayHeight / 2, cursor: 'w-resize' },
+          { x: displayX + displayWidth, y: displayY + displayHeight / 2, cursor: 'e-resize' },
+        ];
+        
+        handles.forEach(handle => {
+          ctx.fillRect(
+            handle.x - handleSize / 2,
+            handle.y - handleSize / 2,
+            handleSize,
+            handleSize
+          );
+        });
+      }
 
       const text = `${box.className} (${(box.confidence * 100).toFixed(0)}%)`;
       ctx.fillStyle = isSelected ? '#3B82F6' : '#10B981';
@@ -125,7 +172,44 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
     if (isDrawing) {
       setDrawStart({ x: xOnImage, y: yOnImage });
       setSelectedBox(null); // Deselect any box when starting to draw
+    } else if (isMoving && selectedBox) {
+      setMoveStart({ x: xOnImage, y: yOnImage });
     } else {
+      // Check for resize handle click first
+      if (selectedBox) {
+        const selectedBoxData = currentImage.boundingBoxes.find(box => box.id === selectedBox);
+        if (selectedBoxData) {
+          const imageToCanvasScale = canvasRef.current.width / currentImage.width;
+          const displayX = selectedBoxData.x * imageToCanvasScale;
+          const displayY = selectedBoxData.y * imageToCanvasScale;
+          const displayWidth = selectedBoxData.width * imageToCanvasScale;
+          const displayHeight = selectedBoxData.height * imageToCanvasScale;
+          
+          const handleSize = 8 / zoom;
+          const canvasX = (mouseX - pan.x) / zoom;
+          const canvasY = (mouseY - pan.y) / zoom;
+          
+          const handles = [
+            { x: displayX, y: displayY, handle: 'nw' },
+            { x: displayX + displayWidth, y: displayY, handle: 'ne' },
+            { x: displayX, y: displayY + displayHeight, handle: 'sw' },
+            { x: displayX + displayWidth, y: displayY + displayHeight, handle: 'se' },
+            { x: displayX + displayWidth / 2, y: displayY, handle: 'n' },
+            { x: displayX + displayWidth / 2, y: displayY + displayHeight, handle: 's' },
+            { x: displayX, y: displayY + displayHeight / 2, handle: 'w' },
+            { x: displayX + displayWidth, y: displayY + displayHeight / 2, handle: 'e' },
+          ];
+          
+          for (const handle of handles) {
+            if (Math.abs(canvasX - handle.x) < handleSize && Math.abs(canvasY - handle.y) < handleSize) {
+              setIsResizing(true);
+              setResizeHandle(handle.handle);
+              return;
+            }
+          }
+        }
+      }
+      
       const clickedBox = currentImage.boundingBoxes.find(box =>
         xOnImage >= box.x && xOnImage <= box.x + box.width &&
         yOnImage >= box.y && yOnImage <= box.y + box.height
@@ -133,11 +217,15 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
 
       if (clickedBox) {
         setSelectedBox(clickedBox.id);
-        // Future: Add logic here for resizing/moving selected box
+        if (isMoving) {
+          setMoveStart({ x: xOnImage, y: yOnImage });
+        }
       } else {
         setSelectedBox(null);
-        setIsPanning(true);
-        setLastPanPos({ x: e.clientX, y: e.clientY });
+        if (!isDrawing && !isMoving) {
+          setIsPanning(true);
+          setLastPanPos({ x: e.clientX, y: e.clientY });
+        }
       }
     }
   };
@@ -145,11 +233,89 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !currentImage) return;
 
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const xOnImage = ((mouseX - pan.x) / zoom) * (currentImage.width / canvasRef.current.width);
+    const yOnImage = ((mouseY - pan.y) / zoom) * (currentImage.height / canvasRef.current.height);
+
     if (isPanning) {
       const dx = e.clientX - lastPanPos.x;
       const dy = e.clientY - lastPanPos.y;
       setPan(prevPan => ({ x: prevPan.x + dx, y: prevPan.y + dy }));
       setLastPanPos({ x: e.clientX, y: e.clientY });
+    } else if (isResizing && selectedBox && resizeHandle) {
+      const selectedBoxData = currentImage.boundingBoxes.find(box => box.id === selectedBox);
+      if (selectedBoxData) {
+        const newBox = { ...selectedBoxData };
+        
+        switch (resizeHandle) {
+          case 'nw':
+            newBox.width += newBox.x - xOnImage;
+            newBox.height += newBox.y - yOnImage;
+            newBox.x = xOnImage;
+            newBox.y = yOnImage;
+            break;
+          case 'ne':
+            newBox.width = xOnImage - newBox.x;
+            newBox.height += newBox.y - yOnImage;
+            newBox.y = yOnImage;
+            break;
+          case 'sw':
+            newBox.width += newBox.x - xOnImage;
+            newBox.height = yOnImage - newBox.y;
+            newBox.x = xOnImage;
+            break;
+          case 'se':
+            newBox.width = xOnImage - newBox.x;
+            newBox.height = yOnImage - newBox.y;
+            break;
+          case 'n':
+            newBox.height += newBox.y - yOnImage;
+            newBox.y = yOnImage;
+            break;
+          case 's':
+            newBox.height = yOnImage - newBox.y;
+            break;
+          case 'w':
+            newBox.width += newBox.x - xOnImage;
+            newBox.x = xOnImage;
+            break;
+          case 'e':
+            newBox.width = xOnImage - newBox.x;
+            break;
+        }
+        
+        // Ensure minimum size
+        if (newBox.width > 10 && newBox.height > 10) {
+          const updatedBoxes = currentImage.boundingBoxes.map(box =>
+            box.id === selectedBox ? newBox : box
+          );
+          updateBoundingBoxes(imageId, updatedBoxes);
+        }
+      }
+    } else if (isMoving && selectedBox && moveStart) {
+      const selectedBoxData = currentImage.boundingBoxes.find(box => box.id === selectedBox);
+      if (selectedBoxData) {
+        const deltaX = xOnImage - moveStart.x;
+        const deltaY = yOnImage - moveStart.y;
+        
+        const newBox = {
+          ...selectedBoxData,
+          x: selectedBoxData.x + deltaX,
+          y: selectedBoxData.y + deltaY,
+        };
+        
+        // Keep box within image bounds
+        newBox.x = Math.max(0, Math.min(newBox.x, currentImage.width - newBox.width));
+        newBox.y = Math.max(0, Math.min(newBox.y, currentImage.height - newBox.height));
+        
+        const updatedBoxes = currentImage.boundingBoxes.map(box =>
+          box.id === selectedBox ? newBox : box
+        );
+        updateBoundingBoxes(imageId, updatedBoxes);
+        setMoveStart({ x: xOnImage, y: yOnImage });
+      }
     } else if (isDrawing && drawStart) {
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
@@ -161,7 +327,6 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
       ctx.translate(pan.x, pan.y);
       ctx.scale(zoom, zoom);
 
-      const rect = canvas.getBoundingClientRect();
       const currentXOnCanvas = (e.clientX - rect.left - pan.x) / zoom;
       const currentYOnCanvas = (e.clientY - rect.top - pan.y) / zoom;
 
@@ -185,6 +350,10 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
 
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsPanning(false);
+    setIsResizing(false);
+    setResizeHandle(null);
+    setMoveStart(null);
+    
     if (isDrawing && drawStart && currentImage) {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -212,13 +381,18 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
         setSelectedBox(newBox.id);
       }
       setDrawStart(null);
-      setIsDrawing(false); // Exit drawing mode after drawing a box
     }
   };
 
   const toggleDrawingMode = () => {
     setIsDrawing(prev => !prev);
+    setIsMoving(false);
     setSelectedBox(null); // Deselect any box when toggling drawing mode
+  };
+
+  const toggleMovingMode = () => {
+    setIsMoving(prev => !prev);
+    setIsDrawing(false);
   };
 
   const addNewBox = () => {
@@ -243,6 +417,38 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
     const updatedBoxes = currentImage.boundingBoxes.filter(box => box.id !== selectedBox);
     updateBoundingBoxes(imageId, updatedBoxes);
     setSelectedBox(null);
+  };
+
+  const startEditingClass = (boxId: string) => {
+    const box = currentImage?.boundingBoxes.find(b => b.id === boxId);
+    if (box) {
+      setEditingClass(boxId);
+      setNewClassName(box.className);
+    }
+  };
+
+  const saveClassName = () => {
+    if (!editingClass || !currentImage || !newClassName.trim()) return;
+    
+    const updatedBoxes = currentImage.boundingBoxes.map(box =>
+      box.id === editingClass ? { ...box, className: newClassName.trim() } : box
+    );
+    updateBoundingBoxes(imageId, updatedBoxes);
+    setEditingClass(null);
+    setNewClassName('');
+  };
+
+  const cancelEditingClass = () => {
+    setEditingClass(null);
+    setNewClassName('');
+  };
+
+  const handleClassKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      saveClassName();
+    } else if (e.key === 'Escape') {
+      cancelEditingClass();
+    }
   };
 
   const goToNext = () => {
@@ -301,6 +507,12 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
             <Square className="h-4 w-4 mr-1" /> {isDrawing ? 'Stop Drawing' : 'Draw New Box'}
           </button>
           <button
+            onClick={toggleMovingMode}
+            className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md ${isMoving ? 'bg-orange-600 hover:bg-orange-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200'}`}
+          >
+            <Move className="h-4 w-4 mr-1" /> {isMoving ? 'Stop Moving' : 'Move Mode'}
+          </button>
+          <button
             onClick={deleteSelectedBox}
             disabled={!selectedBox}
             className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
@@ -313,6 +525,13 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
             className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Detect Objects
+          </button>
+          <button
+            onClick={() => setShowAllBoxes(!showAllBoxes)}
+            className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md ${showAllBoxes ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-yellow-600 hover:bg-yellow-700 text-white'}`}
+          >
+            {showAllBoxes ? <Eye className="h-4 w-4 mr-1" /> : <EyeOff className="h-4 w-4 mr-1" />}
+            {showAllBoxes ? 'Hide Others' : 'Show All'}
           </button>
           <div className="flex justify-between space-x-2">
             <button
@@ -348,7 +567,30 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
                 }`}
                 onClick={() => setSelectedBox(box.id)}
               >
-                <div className="text-white font-medium">{box.className}</div>
+                <div className="flex items-center justify-between">
+                  {editingClass === box.id ? (
+                    <input
+                      ref={classInputRef}
+                      type="text"
+                      value={newClassName}
+                      onChange={(e) => setNewClassName(e.target.value)}
+                      onKeyDown={handleClassKeyPress}
+                      onBlur={saveClassName}
+                      className="bg-gray-700 text-white px-2 py-1 rounded text-sm flex-1 mr-2"
+                    />
+                  ) : (
+                    <div className="text-white font-medium flex-1">{box.className}</div>
+                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEditingClass(box.id);
+                    }}
+                    className="text-gray-400 hover:text-white p-1"
+                  >
+                    <Edit3 className="h-3 w-3" />
+                  </button>
+                </div>
                 <div className="text-sm text-gray-400">Confidence: {(box.confidence*100).toFixed(1)}%</div>
                 <div className="text-xs text-gray-500">
                   {Math.round(box.x)}, {Math.round(box.y)} • {Math.round(box.width)} × {Math.round(box.height)}
@@ -416,10 +658,23 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp} // End pan/draw if mouse leaves canvas
-            style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 8rem)', cursor: isDrawing ? 'crosshair' : (isPanning ? 'grabbing' : 'grab') }}
+            style={{ 
+              maxWidth: '100%', 
+              maxHeight: 'calc(100vh - 8rem)', 
+              cursor: isDrawing ? 'crosshair' : 
+                     isMoving ? 'move' : 
+                     isResizing ? 'pointer' :
+                     isPanning ? 'grabbing' : 'grab' 
+            }}
           />
           <div className="absolute top-4 right-4 bg-gray-800 bg-opacity-80 rounded-lg px-3 py-1">
             <span className="text-white text-sm">{Math.round(zoom * 100)}%</span>
+            {(isDrawing || isMoving) && (
+              <div className="text-xs text-gray-300 mt-1">
+                {isDrawing && 'Drawing Mode'}
+                {isMoving && 'Moving Mode'}
+              </div>
+            )}
           </div>
         </div>
       </div>

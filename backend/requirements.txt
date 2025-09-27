@@ -1,0 +1,8 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+Pillow==10.1.0
+# ultralytics==8.0.206  # Uncomment for actual YOLOv8 integration
+# torch>=1.7.0  # Required for YOLOv8
+# torchvision>=0.8.1  # Required for YOLOv8
+# opencv-python>=4.5.0  # Required for YOLOv8

@@ -8,7 +8,9 @@ interface FileUploadProps {
 
 // Add this interface above the component
 interface FolderInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
-  webkitdirectory: string | boolean;
+  webkitdirectory?: string | boolean;
+  directory?: string | boolean;
+  mozdirectory?: string | boolean;
 }
 
 export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
@@ -51,10 +53,21 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
     setUploadedFiles(files);
   };
 
+  // Update the handleFileSelect function:
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     setError(null);
     const files = Array.from(e.target.files || []);
-    const imageFiles = files.filter(file => file.type.startsWith('image/'));
+    
+    if (files.length === 0) {
+      setError('No files selected');
+      return;
+    }
+
+    const imageFiles = files.filter(file => {
+      const isImage = file.type.startsWith('image/');
+      const isValidSize = file.size <= 10 * 1024 * 1024; // 10MB limit
+      return isImage && isValidSize;
+    });
     
     if (imageFiles.length === 0) {
       setError('No valid image files selected');
@@ -62,7 +75,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
     }
     
     if (files.length !== imageFiles.length) {
-      setError('Some files were skipped (non-image files)');
+      setError(`${files.length - imageFiles.length} files were skipped (non-image files or too large)`);
     }
     
     setUploadedFiles(imageFiles);
@@ -190,8 +203,12 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
             type="file"
             multiple
             accept="image/*"
-            webkitdirectory="true"
-            directory="true"
+            // @ts-ignore
+            webkitdirectory=""
+            // @ts-ignore
+            directory=""
+            // @ts-ignore
+            mozdirectory=""
             onChange={handleFileSelect}
             className="hidden"
           />

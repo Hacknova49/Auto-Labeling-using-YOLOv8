@@ -83,8 +83,8 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
         id: Math.random().toString(36).substring(7),
         filename: file.name,
         url: URL.createObjectURL(file),
-        width: 800, // Will be updated when image loads
-        height: 600, // Will be updated when image loads
+        width: 800,
+        height: 600,
         status: 'pending' as const,
         boundingBoxes: [],
       }));
@@ -107,38 +107,87 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
     setProcessingQueue(imageIds);
 
     for (const imageId of imageIds) {
-      updateImage(imageId, { status: 'processing' });
-      
-      // Simulate processing time
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Mock detection results
-      const mockBoxes: BoundingBox[] = [
-        {
-          id: Math.random().toString(36).substring(7),
-          x: Math.random() * 300,
-          y: Math.random() * 200,
-          width: 100 + Math.random() * 100,
-          height: 80 + Math.random() * 80,
-          className: ['person', 'car', 'bicycle', 'dog'][Math.floor(Math.random() * 4)],
-          confidence: 0.7 + Math.random() * 0.3,
-        },
-        {
-          id: Math.random().toString(36).substring(7),
-          x: Math.random() * 400,
-          y: Math.random() * 300,
-          width: 80 + Math.random() * 120,
-          height: 60 + Math.random() * 100,
-          className: ['person', 'car', 'bicycle', 'dog'][Math.floor(Math.random() * 4)],
-          confidence: 0.6 + Math.random() * 0.4,
-        },
-      ];
+      const img = images.find(i => i.id === imageId);
+      if (!img) continue;
 
-      updateImage(imageId, { 
-        status: 'completed', 
-        boundingBoxes: mockBoxes,
-        processingTime: 1.5 + Math.random() * 2
-      });
+      updateImage(imageId, { status: "processing" });
+
+      try {
+        // Convert blob from object URL
+        const fileResponse = await fetch(img.url);
+        const blob = await fileResponse.blob();
+        const formData = new FormData();
+        formData.append("file", blob, img.filename);
+
+        // Send to YOLOv8 backend
+        const res = await fetch("http://localhost:8000/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!res.ok) throw new Error("Detection API error");
+
+        const data = await res.json();
+
+        // Apply prioritization filters
+        const detections: BoundingBox[] = data.boundingBoxes
+          .filter((box: any) => {
+            // Confidence filter
+            if (
+              prioritizationPrompt.confidenceThreshold &&
+              box.confidence < prioritizationPrompt.confidenceThreshold
+            ) return false;
+
+            // Ignore classes
+            if (
+              prioritizationPrompt.ignoreClasses &&
+              prioritizationPrompt.ignoreClasses.includes(box.class_name)
+            ) return false;
+
+            // Object size constraints
+            const area = box.width * box.height;
+            if (
+              prioritizationPrompt.minObjectSize &&
+              area < prioritizationPrompt.minObjectSize
+            ) return false;
+
+            if (
+              prioritizationPrompt.maxObjectSize &&
+              area > prioritizationPrompt.maxObjectSize
+            ) return false;
+
+            return true;
+          })
+          .map((box: any) => ({
+            id: Math.random().toString(36).substring(7),
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+            className: box.class_name,
+            confidence: box.confidence,
+          }));
+
+        // Optional: reorder based on class priorities
+        if (prioritizationPrompt.classPriorities?.length) {
+          detections.sort((a, b) => {
+            const priA =
+              prioritizationPrompt.classPriorities?.indexOf(a.className) ?? 999;
+            const priB =
+              prioritizationPrompt.classPriorities?.indexOf(b.className) ?? 999;
+            return priA - priB;
+          });
+        }
+
+        updateImage(imageId, {
+          status: "completed",
+          boundingBoxes: detections,
+          processingTime: 1.0,
+        });
+      } catch (err) {
+        console.error("Detection failed:", err);
+        updateImage(imageId, { status: "pending" });
+      }
     }
 
     setProcessingQueue([]);
@@ -159,9 +208,8 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const exportDataset = (format: 'yolo' | 'coco' | 'pascal') => {
-    // Mock export functionality
     console.log(`Exporting dataset in ${format} format...`);
-    // In real implementation, this would generate and download the export file
+    // TODO: call backend /api/datasets/{dataset_id}/export
   };
 
   return (

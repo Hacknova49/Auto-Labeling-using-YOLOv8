@@ -67,10 +67,7 @@ export const PrioritizationPanel: React.FC<PrioritizationPanelProps> = ({ onClos
           <Settings className="h-5 w-5 mr-2" />
           Prioritization Settings
         </h3>
-        <button
-          onClick={onClose}
-          className="text-gray-400 hover:text-white"
-        >
+        <button onClick={onClose} className="text-gray-400 hover:text-white">
           <X className="h-5 w-5" />
         </button>
       </div>

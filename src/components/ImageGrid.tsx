@@ -63,7 +63,7 @@ export const ImageGrid: React.FC<ImageGridProps> = ({ onImageSelect }) => {
               className="w-full h-full object-cover"
             />
             <div className="absolute inset-0 bg-black bg-opacity-0 hover:bg-opacity-20 transition-all duration-200" />
-            
+
             {/* Status Badge */}
             <div className="absolute top-2 right-2 flex items-center space-x-1 bg-gray-900 bg-opacity-80 rounded-full px-2 py-1">
               {getStatusIcon(image.status)}
@@ -79,16 +79,12 @@ export const ImageGrid: React.FC<ImageGridProps> = ({ onImageSelect }) => {
               </div>
             )}
           </div>
-          
+
           <div className="p-3">
-            <div className="text-white text-sm font-medium truncate">
-              {image.filename}
-            </div>
+            <div className="text-white text-sm font-medium truncate">{image.filename}</div>
             <div className="text-gray-400 text-xs mt-1 flex items-center justify-between">
               <span>{image.width} × {image.height}</span>
-              {image.processingTime && (
-                <span>{image.processingTime.toFixed(1)}s</span>
-              )}
+              {image.processingTime && <span>{image.processingTime.toFixed(1)}s</span>}
             </div>
           </div>
         </div>

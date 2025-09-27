@@ -15,6 +15,8 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false); // New state for panning
+  const [lastPanPos, setLastPanPos] = useState({ x: 0, y: 0 }); // New state for panning
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
 
@@ -43,67 +45,180 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Calculate the scale factor from original image dimensions to the canvas display dimensions (at zoom=1)
+    // This assumes the canvas dimensions are set proportionally in onLoad.
+    const imageToCanvasScale = canvas.width / currentImage.width;
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
-    ctx.drawImage(image, 0, 0, canvas.width / zoom, canvas.height / zoom);
+
+    // Draw the image to fill the canvas at the current zoom level.
+    // The canvas dimensions are already set to fit the image (proportionally scaled down)
+    // when zoom = 1.
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
 
     currentImage.boundingBoxes.forEach((box) => {
       const isSelected = selectedBox === box.id;
       ctx.strokeStyle = isSelected ? '#3B82F6' : '#10B981';
-      ctx.lineWidth = isSelected ? 3 : 2;
-      ctx.setLineDash(isSelected ? [5, 5] : []);
-      ctx.strokeRect(
-        (box.x / currentImage.width) * (canvas.width / zoom),
-        (box.y / currentImage.height) * (canvas.height / zoom),
-        (box.width / currentImage.width) * (canvas.width / zoom),
-        (box.height / currentImage.height) * (canvas.height / zoom)
-      );
+      ctx.lineWidth = isSelected ? 3 / zoom : 2 / zoom; // Adjust line width for zoom
+      ctx.setLineDash(isSelected ? [5 / zoom, 5 / zoom] : []); // Adjust dash for zoom
+
+      // Scale box coordinates from original image dimensions to the current canvas display dimensions (at zoom=1)
+      const displayX = box.x * imageToCanvasScale;
+      const displayY = box.y * imageToCanvasScale;
+      const displayWidth = box.width * imageToCanvasScale;
+      const displayHeight = box.height * imageToCanvasScale;
+
+      ctx.strokeRect(displayX, displayY, displayWidth, displayHeight);
 
       const text = `${box.className} (${(box.confidence * 100).toFixed(0)}%)`;
       ctx.fillStyle = isSelected ? '#3B82F6' : '#10B981';
-      const textWidth = ctx.measureText(text).width + 8;
+      ctx.font = `${12 / zoom}px Arial`; // Adjust font size for zoom
+      const textMetrics = ctx.measureText(text);
+      const textWidth = textMetrics.width + (8 / zoom); // Adjust padding for zoom
+      const textHeight = 20 / zoom; // Approximate height for the text background
+
       ctx.fillRect(
-        (box.x / currentImage.width) * (canvas.width / zoom),
-        (box.y / currentImage.height) * (canvas.height / zoom) - 20,
+        displayX,
+        displayY - textHeight,
         textWidth,
-        20
+        textHeight
       );
 
       ctx.fillStyle = 'white';
-      ctx.font = '12px Arial';
       ctx.fillText(
         text,
-        (box.x / currentImage.width) * (canvas.width / zoom) + 4,
-        (box.y / currentImage.height) * (canvas.height / zoom) - 6
+        displayX + (4 / zoom),
+        displayY - (6 / zoom)
       );
     });
 
     ctx.restore();
   };
 
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || !currentImage) return;
+  const handleZoomIn = () => {
+    setZoom(prevZoom => Math.min(prevZoom + 0.1, 5)); // Max zoom 5x
+  };
 
-    const rect = canvas.getBoundingClientRect();
-    const x = ((e.clientX - rect.left - pan.x) / zoom) * (currentImage.width / canvas.width);
-    const y = ((e.clientY - rect.top - pan.y) / zoom) * (currentImage.height / canvas.height);
+  const handleZoomOut = () => {
+    setZoom(prevZoom => Math.max(prevZoom - 0.1, 0.1)); // Min zoom 0.1x
+  };
 
-    const clickedBox = currentImage.boundingBoxes.find(box =>
-      x >= box.x && x <= box.x + box.width &&
-      y >= box.y && y <= box.y + box.height
-    );
+  const handleResetView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
 
-    if (clickedBox) {
-      setSelectedBox(clickedBox.id);
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !currentImage) return;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    // Convert mouse coordinates on canvas to coordinates on the original image
+    const xOnImage = ((mouseX - pan.x) / zoom) * (currentImage.width / canvasRef.current.width);
+    const yOnImage = ((mouseY - pan.y) / zoom) * (currentImage.height / canvasRef.current.height);
+
+    if (isDrawing) {
+      setDrawStart({ x: xOnImage, y: yOnImage });
+      setSelectedBox(null); // Deselect any box when starting to draw
     } else {
-      setSelectedBox(null);
-      if (isDrawing) {
-        setDrawStart({ x, y });
+      const clickedBox = currentImage.boundingBoxes.find(box =>
+        xOnImage >= box.x && xOnImage <= box.x + box.width &&
+        yOnImage >= box.y && yOnImage <= box.y + box.height
+      );
+
+      if (clickedBox) {
+        setSelectedBox(clickedBox.id);
+        // Future: Add logic here for resizing/moving selected box
+      } else {
+        setSelectedBox(null);
+        setIsPanning(true);
+        setLastPanPos({ x: e.clientX, y: e.clientY });
       }
     }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !currentImage) return;
+
+    if (isPanning) {
+      const dx = e.clientX - lastPanPos.x;
+      const dy = e.clientY - lastPanPos.y;
+      setPan(prevPan => ({ x: prevPan.x + dx, y: prevPan.y + dy }));
+      setLastPanPos({ x: e.clientX, y: e.clientY });
+    } else if (isDrawing && drawStart) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      drawCanvas(); // Redraw existing annotations first
+
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
+      ctx.scale(zoom, zoom);
+
+      const rect = canvas.getBoundingClientRect();
+      const currentXOnCanvas = (e.clientX - rect.left - pan.x) / zoom;
+      const currentYOnCanvas = (e.clientY - rect.top - pan.y) / zoom;
+
+      // Convert drawStart (image coords) to canvas coords
+      const imageToCanvasScale = canvas.width / currentImage.width;
+      const startXOnCanvas = drawStart.x * imageToCanvasScale;
+      const startYOnCanvas = drawStart.y * imageToCanvasScale;
+
+      const tempBoxX = Math.min(startXOnCanvas, currentXOnCanvas);
+      const tempBoxY = Math.min(startYOnCanvas, currentYOnCanvas);
+      const tempBoxWidth = Math.abs(startXOnCanvas - currentXOnCanvas);
+      const tempBoxHeight = Math.abs(startYOnCanvas - currentYOnCanvas);
+
+      ctx.strokeStyle = '#3B82F6';
+      ctx.lineWidth = 2 / zoom;
+      ctx.setLineDash([5 / zoom, 5 / zoom]);
+      ctx.strokeRect(tempBoxX, tempBoxY, tempBoxWidth, tempBoxHeight);
+      ctx.restore();
+    }
+  };
+
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setIsPanning(false);
+    if (isDrawing && drawStart && currentImage) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const endXOnImage = ((e.clientX - rect.left - pan.x) / zoom) * (currentImage.width / canvas.width);
+      const endYOnImage = ((e.clientY - rect.top - pan.y) / zoom) * (currentImage.height / canvas.height);
+
+      const newBoxX = Math.min(drawStart.x, endXOnImage);
+      const newBoxY = Math.min(drawStart.y, endYOnImage);
+      const newBoxWidth = Math.abs(drawStart.x - endXOnImage);
+      const newBoxHeight = Math.abs(drawStart.y - endYOnImage);
+
+      if (newBoxWidth > 5 && newBoxHeight > 5) { // Minimum size for a valid box
+        const newBox: BoundingBox = {
+          id: Math.random().toString(36).substring(7),
+          x: newBoxX,
+          y: newBoxY,
+          width: newBoxWidth,
+          height: newBoxHeight,
+          className: 'object', // Default class name, could be made configurable
+          confidence: 1.0,
+        };
+        updateBoundingBoxes(imageId, [...currentImage.boundingBoxes, newBox]);
+        setSelectedBox(newBox.id);
+      }
+      setDrawStart(null);
+      setIsDrawing(false); // Exit drawing mode after drawing a box
+    }
+  };
+
+  const toggleDrawingMode = () => {
+    setIsDrawing(prev => !prev);
+    setSelectedBox(null); // Deselect any box when toggling drawing mode
   };
 
   const addNewBox = () => {
@@ -177,7 +292,13 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
             onClick={addNewBox}
             className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md"
           >
-            <Plus className="h-4 w-4 mr-1" /> Add Box
+            <Plus className="h-4 w-4 mr-1" /> Add Box (Fixed Pos)
+          </button>
+          <button
+            onClick={toggleDrawingMode}
+            className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md ${isDrawing ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200'}`}
+          >
+            <Square className="h-4 w-4 mr-1" /> {isDrawing ? 'Stop Drawing' : 'Draw New Box'}
           </button>
           <button
             onClick={deleteSelectedBox}
@@ -193,6 +314,26 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
           >
             Detect Objects
           </button>
+          <div className="flex justify-between space-x-2">
+            <button
+              onClick={handleZoomOut}
+              className="flex-1 flex items-center justify-center px-3 py-2 text-sm font-medium text-gray-200 bg-gray-700 hover:bg-gray-600 rounded-md"
+            >
+              <ZoomOut className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleResetView}
+              className="flex-1 flex items-center justify-center px-3 py-2 text-sm font-medium text-gray-200 bg-gray-700 hover:bg-gray-600 rounded-md"
+            >
+              <RotateCcw className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleZoomIn}
+              className="flex-1 flex items-center justify-center px-3 py-2 text-sm font-medium text-gray-200 bg-gray-700 hover:bg-gray-600 rounded-md"
+            >
+              <ZoomIn className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Annotation List */}
@@ -243,17 +384,39 @@ export const AnnotationEditor: React.FC<AnnotationEditorProps> = ({ imageId, onB
             className="hidden"
             onLoad={() => {
               if (canvasRef.current && imageRef.current) {
-                canvasRef.current.width = Math.min(800, imageRef.current.naturalWidth);
-                canvasRef.current.height = Math.min(600, imageRef.current.naturalHeight);
+                const canvas = canvasRef.current;
+                const image = imageRef.current;
+
+                const maxWidth = 800;
+                const maxHeight = 600;
+
+                let newWidth = image.naturalWidth;
+                let newHeight = image.naturalHeight;
+
+                // Scale down if image is larger than max dimensions, maintaining aspect ratio
+                if (newWidth > maxWidth) {
+                  newHeight = (newHeight / newWidth) * maxWidth;
+                  newWidth = maxWidth;
+                }
+                if (newHeight > maxHeight) {
+                  newWidth = (newWidth / newHeight) * maxHeight;
+                  newHeight = maxHeight;
+                }
+
+                canvas.width = newWidth;
+                canvas.height = newHeight;
                 drawCanvas();
               }
             }}
           />
           <canvas
             ref={canvasRef}
-            className="border border-gray-600 rounded-lg shadow-lg cursor-crosshair"
-            onClick={handleCanvasClick}
-            style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 8rem)' }}
+            className="border border-gray-600 rounded-lg shadow-lg"
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp} // End pan/draw if mouse leaves canvas
+            style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 8rem)', cursor: isDrawing ? 'crosshair' : (isPanning ? 'grabbing' : 'grab') }}
           />
           <div className="absolute top-4 right-4 bg-gray-800 bg-opacity-80 rounded-lg px-3 py-1">
             <span className="text-white text-sm">{Math.round(zoom * 100)}%</span>

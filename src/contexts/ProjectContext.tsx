@@ -129,9 +129,19 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
 
         const data = await res.json();
 
+        // Define the type for backend bounding box response
+        type BackendBoundingBox = {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          class_name: string;
+          confidence: number;
+        };
+
         // Apply prioritization filters
-        const detections: BoundingBox[] = data.boundingBoxes
-          .filter((box: any) => {
+        const detections: BoundingBox[] = (data.boundingBoxes as BackendBoundingBox[])
+          .filter((box: BackendBoundingBox) => {
             // Confidence filter
             if (
               prioritizationPrompt.confidenceThreshold &&
@@ -158,7 +168,7 @@ export const ProjectProvider: React.FC<{ children: ReactNode }> = ({ children })
 
             return true;
           })
-          .map((box: any) => ({
+          .map((box: BackendBoundingBox) => ({
             id: Math.random().toString(36).substring(7),
             x: box.x,
             y: box.y,

@@ -1,9 +1,14 @@
 import React, { useState, useRef } from 'react';
-import { Upload, X, Image, Folder, AlertCircle } from 'lucide-react';
+import { Upload, X, Image, Folder, AlertCircle, Loader2 } from 'lucide-react';
 import { useProject } from '../contexts/ProjectContext';
 
 interface FileUploadProps {
   onClose: () => void;
+}
+
+// Add this interface above the component
+interface FolderInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  webkitdirectory: string | boolean;
 }
 
 export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
@@ -11,8 +16,10 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [uploadMode, setUploadMode] = useState<'single' | 'folder'>('single');
+  const [error, setError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement & FolderInputProps>(null);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -45,14 +52,33 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
     const files = Array.from(e.target.files || []);
-    setUploadedFiles(files.filter(file => file.type.startsWith('image/')));
+    const imageFiles = files.filter(file => file.type.startsWith('image/'));
+    
+    if (imageFiles.length === 0) {
+      setError('No valid image files selected');
+      return;
+    }
+    
+    if (files.length !== imageFiles.length) {
+      setError('Some files were skipped (non-image files)');
+    }
+    
+    setUploadedFiles(imageFiles);
   };
 
-  const handleUpload = () => {
+  const handleUpload = async () => {
     if (uploadedFiles.length > 0) {
-      addImages(uploadedFiles);
-      onClose();
+      try {
+        setIsUploading(true);
+        await addImages(uploadedFiles);
+        onClose();
+      } catch (error) {
+        setError('Failed to upload images');
+      } finally {
+        setIsUploading(false);
+      }
     }
   };
 
@@ -164,7 +190,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
             type="file"
             multiple
             accept="image/*"
-            webkitdirectory=""
+            webkitdirectory="true"
+            directory="true"
             onChange={handleFileSelect}
             className="hidden"
           />
@@ -201,6 +228,14 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
             </div>
           )}
 
+          {/* Error Message */}
+          {error && (
+            <div className="mt-4 flex items-center text-sm text-red-400">
+              <AlertCircle className="h-4 w-4 mr-2" />
+              {error}
+            </div>
+          )}
+
           {/* Upload Button */}
           <div className="mt-6 flex justify-end space-x-3">
             <button
@@ -211,10 +246,17 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onClose }) => {
             </button>
             <button
               onClick={handleUpload}
-              disabled={uploadedFiles.length === 0}
-              className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={uploadedFiles.length === 0 || isUploading}
+              className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center"
             >
-              Upload {uploadedFiles.length} File{uploadedFiles.length !== 1 ? 's' : ''}
+              {isUploading ? (
+                <>
+                  <Loader2 className="animate-spin h-4 w-4 mr-2" />
+                  Uploading...
+                </>
+              ) : (
+                `Upload ${uploadedFiles.length} File${uploadedFiles.length !== 1 ? 's' : ''}`
+              )}
             </button>
           </div>
         </div>

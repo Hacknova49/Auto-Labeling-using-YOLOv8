@@ -6,11 +6,20 @@ interface PrioritizationPanelProps {
   onClose: () => void;
 }
 
+interface PrioritizationPrompt {
+  confidenceThreshold?: number;
+  classPriorities?: string[];
+  classWeights?: { [key: string]: number };
+  minObjectSize?: number;
+  maxObjectSize?: number;
+  customPrompt?: string;
+}
+
 export const PrioritizationPanel: React.FC<PrioritizationPanelProps> = ({ onClose }) => {
   const { prioritizationPrompt, setPrioritizationPrompt } = useProject();
-  const [localPrompt, setLocalPrompt] = useState(prioritizationPrompt);
+  const [localPrompt, setLocalPrompt] = useState<PrioritizationPrompt>(prioritizationPrompt || {});
   const [mode, setMode] = useState<'simple' | 'advanced' | 'json'>('simple');
-  const [jsonInput, setJsonInput] = useState(JSON.stringify(prioritizationPrompt, null, 2));
+  const [jsonInput, setJsonInput] = useState<string>(JSON.stringify(prioritizationPrompt || {}, null, 2));
 
   const commonClasses = [
     'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck',
@@ -23,8 +32,9 @@ export const PrioritizationPanel: React.FC<PrioritizationPanelProps> = ({ onClos
     if (mode === 'json') {
       try {
         const parsed = JSON.parse(jsonInput);
-        setPrioritizationPrompt(parsed);
-      } catch (error) {
+        // Explicitly cast parsed object to PrioritizationPrompt for type safety
+        setPrioritizationPrompt(parsed as PrioritizationPrompt);
+      } catch {
         alert('Invalid JSON format');
         return;
       }
@@ -50,15 +60,6 @@ export const PrioritizationPanel: React.FC<PrioritizationPanelProps> = ({ onClos
     }));
   };
 
-  const updateClassWeight = (className: string, weight: number) => {
-    setLocalPrompt(prev => ({
-      ...prev,
-      classWeights: {
-        ...(prev.classWeights || {}),
-        [className]: weight
-      }
-    }));
-  };
 
   return (
     <div className="bg-gray-800 rounded-lg p-6">
@@ -77,7 +78,7 @@ export const PrioritizationPanel: React.FC<PrioritizationPanelProps> = ({ onClos
         {['simple', 'advanced', 'json'].map((m) => (
           <button
             key={m}
-            onClick={() => setMode(m as any)}
+            onClick={() => setMode(m as 'simple' | 'advanced' | 'json')}
             className={`px-3 py-1 text-sm rounded ${
               mode === m
                 ? 'bg-blue-600 text-white'

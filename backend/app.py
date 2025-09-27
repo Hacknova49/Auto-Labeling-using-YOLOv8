@@ -1,7 +1,7 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 import uvicorn
 import os
 import json
@@ -11,6 +11,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
+import logging
 
 # Real YOLO import
 from ultralytics import YOLO
@@ -26,6 +27,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Logging configuration
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Global configuration
 UPLOAD_DIR = Path("uploads")
 RESULTS_DIR = Path("results")
@@ -33,12 +38,28 @@ DATASETS_DIR = Path("datasets")
 LABELS_DIR = Path("labels")
 PREVIEW_DIR = Path("previews")
 
+# Supported file types
+SUPPORTED_FORMATS: Set[str] = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
+# File size limit (10MB)
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
 for d in (UPLOAD_DIR, RESULTS_DIR, DATASETS_DIR, LABELS_DIR, PREVIEW_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-# Load YOLOv8 model (change model file if needed)
-# Make sure 'yolov8n.pt' is available in working dir or give full path.
-model = YOLO("yolov8n.pt")
+# Add model loading with error handling
+def load_yolo_model():
+    try:
+        return YOLO("yolov8n.pt")
+    except Exception as e:
+        logger.error(f"Failed to load YOLO model: {str(e)}")
+        raise RuntimeError("Failed to initialize YOLO model")
+
+# Initialize model with error handling
+try:
+    model = load_yolo_model()
+except Exception as e:
+    logger.error(f"Model initialization failed: {str(e)}")
+    model = None
 
 # In-memory storage for demo - replace with DB for production
 jobs_db: Dict[str, Any] = {}
@@ -148,58 +169,70 @@ def draw_and_save_preview(image_path: str, detections: List[Dict], preview_dir: 
     except Exception:
         return None
 
+# Update process_single_image function
 def process_single_image(image_path: str, prioritization: Dict[str, Any]) -> Dict[str, Any]:
     """Run YOLOv8 on a single image and return structured detections."""
+    if not model:
+        return {"image_path": str(image_path), "error": "YOLO model not initialized", "status": "failed"}
+
     try:
         start = datetime.now()
-        results = model(str(image_path))  # run inference
+        
+        # Validate image file
+        if not os.path.exists(image_path):
+            return {"image_path": str(image_path), "error": "Image file not found", "status": "failed"}
+        
+        # Validate image can be opened
+        try:
+            img = Image.open(image_path)
+            img.verify()
+        except Exception as e:
+            return {"image_path": str(image_path), "error": f"Invalid image file: {str(e)}", "status": "failed"}
+
+        # Run inference
+        results = model(str(image_path))
         detections: List[Dict[str, Any]] = []
 
-        # results[0].boxes contains the Boxes object; iterate boxes
-        boxes = results[0].boxes
-        # boxes.xyxy (tensor), boxes.conf, boxes.cls
-        # ultralytics boxes elements may be tensors; access with .xyxy, .conf, .cls or iterate boxes
-        for b in boxes:
-            # b.xyxy -> tensor of shape (4,), b.conf -> tensor, b.cls -> tensor
-            try:
-                xyxy = b.xyxy.tolist()[0] if hasattr(b.xyxy, "tolist") and len(b.xyxy.tolist()) > 0 else b.xyxy.tolist()
-            except Exception:
-                # fallback: try indexing
+        # Process results with better error handling
+        try:
+            boxes = results[0].boxes
+            for b in boxes:
                 try:
-                    xyxy = [float(x) for x in b.xyxy]
-                except Exception:
+                    xyxy = b.xyxy.tolist()[0] if hasattr(b.xyxy, "tolist") else b.xyxy
+                    if not isinstance(xyxy, (list, tuple)) or len(xyxy) < 4:
+                        continue
+
+                    x1, y1, x2, y2 = map(float, xyxy[:4])
+                    conf = float(b.conf) if hasattr(b, "conf") else 0.0
+                    cls_id = int(b.cls) if hasattr(b, "cls") else 0
+                    class_name = model.names.get(cls_id, str(cls_id))
+
+                    detections.append({
+                        "id": str(uuid.uuid4()),
+                        "x": x1,
+                        "y": y1,
+                        "width": max(0.0, x2 - x1),
+                        "height": max(0.0, y2 - y1),
+                        "class_name": class_name,
+                        "confidence": conf
+                    })
+                except Exception as e:
+                    logger.warning(f"Error processing detection: {str(e)}")
                     continue
-            # Safely extract coords
-            if isinstance(xyxy, list) and len(xyxy) >= 4:
-                x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
-            else:
-                continue
 
-            conf = float(b.conf) if hasattr(b, "conf") else float(b[4])  # fallback
-            cls_id = int(b.cls) if hasattr(b, "cls") else int(b[5]) if len(b) > 5 else 0
-            class_name = model.names.get(cls_id, str(cls_id))
+        except Exception as e:
+            logger.error(f"Error processing results: {str(e)}")
+            return {"image_path": str(image_path), "error": "Failed to process detections", "status": "failed"}
 
-            detections.append({
-                "id": str(uuid.uuid4()),
-                "x": x1,
-                "y": y1,
-                "width": max(0.0, x2 - x1),
-                "height": max(0.0, y2 - y1),
-                "class_name": class_name,
-                "confidence": conf
-            })
-
-        # Apply prioritization filters provided by client
+        # Apply prioritization
         detections = apply_prioritization(detections, prioritization or {})
 
-        # Save YOLO labels for this image
+        # Save results
         try:
             save_yolo_label_for_image(image_path, detections, LABELS_DIR)
-        except Exception:
-            pass
-
-        # Save preview visualization (optional)
-        preview_path = draw_and_save_preview(image_path, detections, PREVIEW_DIR)
+            preview_path = draw_and_save_preview(image_path, detections, PREVIEW_DIR)
+        except Exception as e:
+            logger.warning(f"Error saving results: {str(e)}")
 
         end = datetime.now()
         elapsed = (end - start).total_seconds()
@@ -211,37 +244,84 @@ def process_single_image(image_path: str, prioritization: Dict[str, Any]) -> Dic
             "processing_time": round(elapsed, 3),
             "status": "completed"
         }
+
     except Exception as e:
+        logger.error(f"Error processing image {image_path}: {str(e)}")
         return {"image_path": str(image_path), "error": str(e), "status": "failed"}
 
 @app.post("/api/upload")
 async def upload_files(files: List[UploadFile] = File(...)):
     """Upload multiple image files"""
-    uploaded_files = []
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No files were provided"
+        )
 
-    supported = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
+    uploaded_files = []
+    errors = []
+
     for file in files:
-        if not file.content_type.startswith("image/"):
+        try:
+            # Validate file first
+            if not file.filename:
+                continue
+
+            # Check content type
+            content_type = file.content_type or ""
+            if not content_type.startswith("image/"):
+                errors.append(f"{file.filename}: Not an image file")
+                continue
+
+            # Read file contents
+            contents = await file.read()
+            file_size = len(contents)
+            
+            # Check file size
+            if file_size > MAX_FILE_SIZE:
+                errors.append(f"{file.filename}: File too large (max {MAX_FILE_SIZE/1024/1024}MB)")
+                continue
+
+            # Validate file extension
+            ext = Path(file.filename).suffix.lower() or ".jpg"
+            if ext not in SUPPORTED_FORMATS:
+                errors.append(f"{file.filename}: Unsupported format")
+                continue
+
+            # Save file
+            file_id = str(uuid.uuid4())
+            dest = UPLOAD_DIR / f"{file_id}{ext}"
+            
+            with open(dest, "wb") as buffer:
+                buffer.write(contents)
+
+            uploaded_files.append({
+                "id": file_id,
+                "filename": file.filename,
+                "path": str(dest),
+                "size": file_size,
+                "contentType": content_type
+            })
+
+        except Exception as e:
+            logger.error(f"Error processing file {file.filename}: {str(e)}")
+            errors.append(f"{file.filename}: {str(e)}")
             continue
 
-        file_id = str(uuid.uuid4())
-        ext = Path(file.filename).suffix or ".jpg"
-        if ext.lower() not in supported:
-            # try to accept by content-type anyway
-            ext = ext.lower()
+    if not uploaded_files:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "No valid files were uploaded",
+                "errors": errors
+            }
+        )
 
-        dest = UPLOAD_DIR / f"{file_id}{ext}"
-        with open(dest, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        uploaded_files.append({
-            "id": file_id,
-            "filename": file.filename,
-            "path": str(dest),
-            "size": os.path.getsize(dest)
-        })
-
-    return {"uploaded_files": uploaded_files, "count": len(uploaded_files)}
+    return {
+        "uploaded_files": uploaded_files,
+        "count": len(uploaded_files),
+        "errors": errors if errors else None
+    }
 
 @app.post("/api/upload_folder")
 async def upload_folder(file: UploadFile = File(...)):
@@ -446,7 +526,6 @@ def create_yolo_export(dataset: Dict[str, Any], export_dir: Path):
     labels_dir.mkdir(parents=True, exist_ok=True)
 
     # Collect classes
-    classes = set()
     for result in dataset["results"]:
         for d in result.get("detections", []):
             classes.add(d["class_name"])
@@ -589,10 +668,24 @@ def create_pascal_export(dataset: Dict[str, Any], export_dir: Path):
         with open(ann_dir / f"{image_id}.xml", "w") as f:
             f.write(xml_content)
 
-@app.get("/")
-async def root():
-    return {"message": "YOLOv8 Auto-Labeling API", "version": "1.0.0"}
+# Add cleanup function
+def cleanup_old_files(directory: Path, max_age_hours: int = 24):
+    """Remove files older than max_age_hours"""
+    try:
+        current_time = datetime.now()
+        for file_path in directory.glob("*"):
+            if file_path.is_file():
+                file_age = current_time - datetime.fromtimestamp(file_path.stat().st_mtime)
+                if file_age.total_seconds() > (max_age_hours * 3600):
+                    file_path.unlink()
+    except Exception as e:
+        logger.error(f"Cleanup failed: {str(e)}")
 
+# Add periodic cleanup to main
 if __name__ == "__main__":
-    # Use uvicorn.run to allow `python app.py`
+    # Cleanup old files on startup
+    for directory in [UPLOAD_DIR, RESULTS_DIR, PREVIEW_DIR]:
+        cleanup_old_files(directory)
+    
+    # Start the server
     uvicorn.run(app, host="0.0.0.0", port=8000)
